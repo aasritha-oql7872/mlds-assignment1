@@ -1,0 +1,6 @@
+torch>=2.2
+numpy>=1.26
+pandas>=2.0
+matplotlib>=3.8
+gymnasium>=1.0
+ale-py>=0.9

@@ -1,0 +1,27 @@
+{
+  "threshold_enumeration_t0": 13,
+  "threshold_value_iteration": 13,
+  "threshold_policy_iteration": 13,
+  "vi_iterations": 500,
+  "pi_iterations": 6,
+  "pi_changes_per_iteration": [
+    196,
+    28,
+    22,
+    7,
+    1,
+    0
+  ],
+  "max_abs_diff_enum_vs_vi": 0.0,
+  "max_abs_diff_vi_vs_pi": 4.93992047267966e-09,
+  "V_star_at": {
+    "0": 576.6702,
+    "10": 660.123,
+    "14": 676.6702,
+    "15": 676.6702,
+    "20": 725.4397,
+    "50": 1001.5277,
+    "100": 1709.0425,
+    "200": 3821.5865
+  }
+}

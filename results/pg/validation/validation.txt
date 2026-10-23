@@ -1,0 +1,75 @@
+
+==============================================================================
+1. Discounted returns (edge cases)
+==============================================================================
+[PASS] r = [1,1,1], gamma = 0.5 gives G = [1.75, 1.5, 1]: [1.75, 1.5, 1.0]
+[PASS] one-step episode: G_0 = r_0: [5.0]
+[PASS] Pong: return restarts after each point: [-0.9800999760627747, -0.9900000095367432, -1.0, 0.9900000095367432, 1.0]
+[PASS] CartPole 500-step episode: G_0 = (1 - 0.95^500)/0.05 ~ 20: G_0 = 20.0000, G_440 = 19.079, G_499 = 1.0
+   The 500-step cap is treated as terminal (no bootstrapping). With gamma = 0.95 that only
+   lowers G_t for the last ~60 steps of a full-length episode.
+
+==============================================================================
+2. Exact-gradient test: estimator is unbiased, baseline cuts variance
+==============================================================================
+[PASS] no baseline: Monte-Carlo mean gradient = exact gradient: cosine 0.9862, worst |z| over 42 parameters 1.84
+[PASS] baseline V(s): Monte-Carlo mean gradient = exact gradient: cosine 1.0000, worst |z| over 42 parameters 1.21
+[PASS] baseline lowers total gradient variance: 115.45 -> 0.573 (201x smaller)
+
+==============================================================================
+3. Deterministic toy task with a known optimum (Corridor, L = 6)
+==============================================================================
+[PASS] no baseline: P(right) > 0.9 everywhere, greedy path = 6 steps: P(right) = [0.9909999966621399, 0.9990000128746033, 0.9959999918937683, 0.9990000128746033, 0.9980000257492065, 0.9980000257492065], greedy length 6
+[PASS] baseline: P(right) > 0.9 everywhere, greedy path = 6 steps: P(right) = [0.996999979019165, 0.9980000257492065, 0.9980000257492065, 0.9980000257492065, 0.9980000257492065, 0.9980000257492065], greedy length 6
+
+==============================================================================
+4. Negative control: shuffle each episode's returns (destroys credit assignment)
+==============================================================================
+[PASS] shuffled returns learn < half as well and stay within 2x of random (~22): mean reward, episodes 301-400: true 351.9, shuffled 13.6
+
+==============================================================================
+5. Gradient variance on CartPole at one fixed policy
+==============================================================================
+[PASS] learned baseline reduces per-episode gradient variance: variance ratio (none / baseline) = 5.2x over 300 episodes
+[PASS] ...without biasing it: difference of the two estimates has mean zero: 0.0% of 898 parameters have |z| > 2.58 (expected ~1% if unbiased)
+
+==============================================================================
+6. Robustness across seeds and learning rates (CartPole, 1000 episodes)
+==============================================================================
+   lr=0.01, no baseline       last-100 training mean   85.2   eval mean   64.1   per seed [115, 47, 16, 49, 93]
+   lr=0.01, baseline          last-100 training mean  241.6   eval mean  176.4   per seed [500, 183, 9, 125, 64]
+   lr=0.003, no baseline      last-100 training mean  223.6   eval mean  209.3   per seed [239, 470, 112, 107, 118]
+   lr=0.003, baseline         last-100 training mean  321.5   eval mean  250.8   per seed [488, 155, 203, 186, 223]
+[PASS] lr=0.01: averaged over seeds, the baseline agent learns at least as well: last-100 training mean: baseline 241.6 vs none 85.2
+[PASS] lr=0.003: averaged over seeds, the baseline agent learns at least as well: last-100 training mean: baseline 321.5 vs none 223.6
+
+==============================================================================
+7. First 10 steps of one CartPole episode (Part 2 agent from section 5)
+==============================================================================
+   episode length 217
+    t       x   x_dot   theta  th_dot P(right)  a  r    G_t  V(s_t)    G-V
+    0   0.018  -0.045  -0.028  -0.032    0.438  1  1  20.00   17.01   2.99
+    1   0.017   0.151  -0.029  -0.333    0.138  0  1  20.00   17.34   2.66
+    2   0.020  -0.044  -0.035  -0.049    0.407  1  1  20.00   17.07   2.93
+    3   0.019   0.152  -0.036  -0.353    0.123  0  1  20.00   17.45   2.55
+    4   0.023  -0.043  -0.043  -0.072    0.369  1  1  20.00   17.15   2.85
+    5   0.022   0.153  -0.045  -0.378    0.108  0  1  20.00   17.58   2.42
+    6   0.025  -0.042  -0.052  -0.100    0.325  0  1  20.00   17.25   2.75
+    7   0.024  -0.236  -0.054   0.176    0.651  1  1  20.00   17.35   2.65
+    8   0.019  -0.040  -0.051  -0.133    0.286  0  1  20.00   17.34   2.66
+    9   0.018  -0.234  -0.053   0.143    0.614  1  1  20.00   17.41   2.59
+[PASS] agent pushes toward the side the pole is falling: corr(theta_dot, P(right)) > 0.5: corr = 0.938 over 217 steps
+
+==============================================================================
+8. Pong input pipeline and action mapping
+==============================================================================
+[PASS] preprocess gives an 80x80 binary float32 image: shape (80, 80), values [0.0, 1.0]
+[PASS] background erased: only paddles and ball remain (< 3% of pixels on): 0.53% of pixels on
+[PASS] preprocess does not modify the environment's frame: 
+[PASS] first network input of an episode is all zeros: 
+[PASS] output 0 -> RIGHT moves the paddle up, output 1 -> LEFT moves it down: row 34 -> 1 (RIGHT), 34 -> 78 (LEFT)
+   uniform random RIGHT/LEFT policy: -20.35 +/- 0.96 over 20 episodes
+
+==============================================================================
+SUMMARY: 20/20 checks passed
+==============================================================================

@@ -1,0 +1,117 @@
+
+==============================================================================
+1. Model construction edge cases
+==============================================================================
+[PASS] transition rows sum to 1 (incl. the s=200 boundary): max |row sum - 1| = 0.00e+00
+[PASS] hold at s=200 keeps queue at 200 w.p. 1 (overflow customers balk): P[hold, 200 -> 200] = 1.0
+[PASS] hold at s=197 hits the cap: P(200) = P(A>=3) = 0.6: P = 0.60
+[PASS] dispatch with s < K empties the station (no negative queue): s=7 dispatch -> next state in {1..5}, cost 100.0
+[PASS] state 0 is never re-entered after an epoch (A >= 1): column 0 of P is all zeros
+[PASS] dispatching an empty station is never optimal: pi*(0) = 0, Q(0,hold)-Q(0,dispatch) = -100.00
+
+==============================================================================
+2. Agreement between the three solution methods
+==============================================================================
+[PASS] value iteration == policy iteration (values): max diff = 4.94e-09
+[PASS] value iteration == policy iteration (policy): threshold VI = 13, PI = 13
+[PASS] finite horizon T=500 within gamma^T ||V*|| of infinite horizon: diff = 0.00e+00 <= bound 2.78e-08
+   Horizon sweep: how fast V_0^T approaches V* (predicted ~ gamma^T):
+     T=   1  ||V_0^T - V*||_inf =   3.4216e+03   gamma^T ||V*|| =   3.6305e+03   threshold at t=0: None
+     T=   5  ||V_0^T - V*||_inf =   2.0118e+03   gamma^T ||V*|| =   2.9571e+03   threshold at t=0: 12
+     T=  10  ||V_0^T - V*||_inf =   9.1702e+02   gamma^T ||V*|| =   2.2881e+03   threshold at t=0: 13
+     T=  25  ||V_0^T - V*||_inf =   1.8842e+02   gamma^T ||V*|| =   1.0601e+03   threshold at t=0: 13
+     T=  50  ||V_0^T - V*||_inf =   5.2249e+01   gamma^T ||V*|| =   2.9405e+02   threshold at t=0: 13
+     T= 100  ||V_0^T - V*||_inf =   4.0203e+00   gamma^T ||V*|| =   2.2626e+01   threshold at t=0: 13
+     T= 200  ||V_0^T - V*||_inf =   2.3802e-02   gamma^T ||V*|| =   1.3396e-01   threshold at t=0: 13
+     T= 500  ||V_0^T - V*||_inf =   0.0000e+00   gamma^T ||V*|| =   2.7800e-08   threshold at t=0: 13
+   Near the end of the horizon the policy should become lazier (dispatching
+   only pays off if enough future periods remain to recoup cf):
+     t=499 (periods left   1): threshold = None
+     t=498 (periods left   2): threshold = None
+     t=497 (periods left   3): threshold = None
+     t=495 (periods left   5): threshold = 12
+     t=490 (periods left  10): threshold = 13
+     t=480 (periods left  20): threshold = 13
+     t=  0 (periods left 500): threshold = 13
+[PASS] last period: dispatch iff ch*min(s,K) > cf, i.e. never (2*15=30 < 100): threshold at t=499 = None
+
+==============================================================================
+3. Optimality certificates
+==============================================================================
+[PASS] Bellman residual of V* is ~0: ||T V* - V*||_inf = 2.48e-10
+[PASS] exact evaluation of greedy policy reproduces V*: max diff = 4.94e-09
+[PASS] VI is a gamma-contraction: successive error ratio <= gamma: max ratio over first 50 iters = 0.9500
+[PASS] VI converges to the same fixed point from a random start: max diff = 9.74e-09
+[PASS] PI from always-dispatch converges to the same policy: 5 iterations, threshold 13
+[PASS] among all 202 threshold policies, the best is the DP threshold: best threshold by enumeration = 13, DP = 13; V* <= every threshold policy at every state: True
+   Value at s=0 of nearby threshold policies:
+     threshold  10: V(0) = 619.8107
+     threshold  11: V(0) = 595.7690
+     threshold  12: V(0) = 581.6643
+     threshold  13: V(0) = 576.6702   <- optimal
+     threshold  14: V(0) = 581.5813
+     threshold  15: V(0) = 597.3560
+     threshold  16: V(0) = 625.7262
+[PASS] small instance: exhaustive search over all 2^12 = 4096 policies matches PI: max value diff = 0.00e+00, policy [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+==============================================================================
+4. Structural properties predicted by theory
+==============================================================================
+[PASS] V* is non-decreasing in s (more waiting customers can never help): min diff = 0.0000
+[PASS] optimal policy is a threshold (control-limit) policy: dispatch iff s >= 13
+[PASS] for s in [thr, K], dispatch clears everyone, so V*(s) = cf + V*(0): V*(13..15) = [676.67, 676.67, 676.67], cf + V*(0) = 676.670
+   For large s, each extra customer is carried ~s/K periods; the slope of V* keeps growing: dV at s=50: 10.63, s=100: 16.93, s=199: 24.85
+
+==============================================================================
+5. Monte Carlo simulation of the optimal policy vs. V*
+==============================================================================
+[PASS] simulated cost from s0=0 matches V*(s0): MC = 576.76 +/- 0.22, V* = 576.67, z = +0.39
+[PASS] simulated cost from s0=13 matches V*(s0): MC = 676.29 +/- 0.22, V* = 676.67, z = -1.70
+[PASS] simulated cost from s0=50 matches V*(s0): MC = 1001.49 +/- 0.22, V* = 1001.53, z = -0.16
+[PASS] simulated cost from s0=150 matches V*(s0): MC = 2665.84 +/- 0.42, V* = 2665.04, z = +1.90
+
+==============================================================================
+6. Parameter perturbations with predicted outcomes
+==============================================================================
+[PASS] cf = 0: dispatch whenever anyone is waiting: threshold = 1
+[PASS] ch = 0: never dispatch and V* = 0: threshold = None, max V = 0.00e+00
+[PASS] cf = 1e7: never dispatch: threshold = None
+[PASS] gamma = 0 (myopic): dispatch iff ch*min(s,K) > cf -> never for these costs: threshold = None
+[PASS] gamma = 0, cf = 20: dispatch iff 2*min(s,15) > 20 -> threshold 11: threshold = 11
+[PASS] K = 200 (one shuttle clears everything): V* flat once dispatching: threshold = 17
+   Sweep of cf (prediction: threshold rises with cf):
+     cf=0:1, cf=10:4, cf=25:8, cf=50:11, cf=100:13, cf=150:14, cf=200:14, cf=300:15, cf=500:15
+[PASS] threshold non-decreasing in cf: 
+   Sweep of ch (prediction: threshold falls with ch):
+     ch=0.5:15, ch=1:14, ch=2:13, ch=4:11, ch=8:8, ch=16:5
+[PASS] threshold non-increasing in ch: 
+   Sweep of gamma (prediction: more patience -> willing to pay cf earlier):
+     gamma=0.5:None, gamma=0.8:14, gamma=0.9:13, gamma=0.95:13, gamma=0.99:13
+[PASS] deterministic arrivals (A=3): DP value equals hand-rolled trajectory cost: threshold 13, trajectory cost 569.7530, V*(0) = 569.7530
+[PASS] raising the cap to 400 does not change the policy or V* for s <= 100: max diff on s<=100 = 4.94e-09
+[PASS] cap never binds under pi*: V*(200) identical with cap 200 and 400: 3821.586 vs 3821.586 (a dispatch removes 15 > max arrivals 5)
+   The cap does bind for a policy that lets the queue grow: under never-dispatch,
+   V(200) = 8000.0 with cap 200 (= 2*200/(1-0.95) = 8000.0, queue frozen)
+   vs 10203.9 with cap 400. Truncation therefore only affects non-optimal policies.
+
+==============================================================================
+7. First 10 decision epochs under pi*, starting at s = 0 (seed 1)
+==============================================================================
+    t    s   Q(hold)   Q(disp)  a   cost  A s_next
+    0    0    576.67    676.67  0      0  3      3
+    1    3    607.61    676.67  0      6  3      6
+    2    6    633.62    676.67  0     12  4     10
+    3   10    660.12    676.67  0     20  5     15
+    4   15    701.67    676.67  1    100  1      1
+    5    1    587.44    676.67  0      2  1      2
+    6    2    597.77    676.67  0      4  5      7
+    7    7    641.57    676.67  0     14  5     12
+    8   12    672.89    676.67  0     24  2     14
+    9   14    690.40    676.67  1    100  2      2
+   Reading: the queue grows by A each period and the agent holds (paying 2/customer)
+   until s >= 13, where Q(dispatch) drops below Q(hold); it then pays cf=100, the
+   queue resets to 0 + A, and the cycle repeats.
+
+==============================================================================
+SUMMARY: 35/35 checks passed
+==============================================================================

@@ -1,0 +1,13 @@
+{
+  "env": "ALE/Pong-v5",
+  "baseline": true,
+  "gamma": 0.99,
+  "lr": 0.001,
+  "hidden": 200,
+  "episodes_per_update": 10,
+  "n_episodes": 10000,
+  "out_dir": "results/pg/pong_part2",
+  "seed": 0,
+  "eval_episodes": 500,
+  "max_minutes": Infinity
+}
