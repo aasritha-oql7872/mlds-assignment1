@@ -1,0 +1,63 @@
+
+==============================================================================
+1. CartPole termination and truncation
+==============================================================================
+[PASS] cart leaves the track (|x| > 2.4) while the pole is upright: episode terminates: x = 2.43, theta = 0.000, terminated = True
+[PASS] pole falls (always pushing left): terminated before the limit, not truncated: 11 steps, theta = 0.260
+[PASS] balancing for the full limit: 500 steps, ends by truncation (not a failure): 500 steps, truncated = True
+[PASS] the 500-step episode is treated as terminal: G_499 = 1 and G_0 = (1 - 0.95^500)/0.05: G_0 = 20.000, G_499 = 1.000
+[PASS] a new episode starts from a fresh reset: same seed gives the identical episode: inputs and rewards identical
+
+==============================================================================
+2. Pong frame differences, points and game end
+==============================================================================
+[PASS] identical consecutive frames give an all-zero difference: difference is 0
+[PASS] a moving ball shows up as +1 where it arrived and -1 where it left, in a few pixels only: median changed pixels per step: 26 of 6400
+[PASS] scoring a point does not end the game: many points are scored within one episode: 22 points scored in one episode (1043 steps)
+[PASS] the game ends exactly when one side reaches 21 points: wins 1, losses 21, terminated = True, score = -20
+
+==============================================================================
+3. Returns around a point boundary (Pong)
+==============================================================================
+[PASS] rewards [0,0,+1,0,0,-1]: each point is its own segment: [0.9800999760627747, 0.9900000095367432, 1.0, -0.9800999760627747, -0.9900000095367432, -1.0]
+[PASS] changing the second point leaves the returns of the actions before the first point unchanged: G[:3] identical
+[PASS] without the reset, the second point would leak into the first segment (what the rule prevents): G_0 = 0.0291 vs 0.9801
+
+==============================================================================
+4. Action probabilities and numerical stability
+==============================================================================
+[PASS] cartpole: probabilities are finite, non-negative and sum to 1: min 0.1625, max row-sum error 1.2e-07
+[PASS] pong: probabilities are finite, non-negative and sum to 1: min 0.4894, max row-sum error 1.2e-07
+[PASS] a nearly deterministic policy (rare action has P = e^-400) keeps loss and gradient finite: loss 400.0, max |grad| 1.00
+
+==============================================================================
+5. Gradient identities for REINFORCE and the baseline
+==============================================================================
+[PASS] all returns zero: the policy gradient is exactly zero: 
+[PASS] baseline predicts every return exactly: advantage 0, gradient exactly zero: 
+[PASS] Part 2 update: the advantage is detached, so the policy loss cannot train the value network: advantage requires_grad = [False]
+[PASS] Part 2 update: the value network does learn (its own MSE loss): 
+
+==============================================================================
+6. Training updates the network, evaluation does not, and nothing becomes NaN
+==============================================================================
+[PASS] after 30 training episodes (with baseline) all weights are finite: no NaN or Inf in policy or value net
+[PASS] evaluation does not change the weights: weights identical
+[PASS] training does change the weights (compared with the same initialisation): mean |change| = 0.0173
+
+==============================================================================
+7. Negative control repeated over seeds (shuffled returns vs true returns, CartPole)
+==============================================================================
+   seed 2: last-100 mean reward  true returns  272.8   shuffled   71.3   (random play ~22)
+   seed 3: last-100 mean reward  true returns  239.8   shuffled   67.6   (random play ~22)
+   seed 4: last-100 mean reward  true returns  103.6   shuffled   34.4   (random play ~22)
+   seed 5: last-100 mean reward  true returns  308.8   shuffled   53.3   (random play ~22)
+   seed 6: last-100 mean reward  true returns  145.6   shuffled   49.0   (random play ~22)
+[PASS] on every seed the shuffled agent ends below half the true-returns agent (400 episodes each): shuffled/true = [0.26, 0.28, 0.33, 0.17, 0.34]
+   Note: an earlier 300-episode version of this test gave 0.53 on one seed, because the true-returns
+   agent had not yet learned much by episode 300 (110). Shuffled agents stay above random (22)
+   because shuffling keeps each episode's total return, so longer episodes still get more credit.
+
+==============================================================================
+SUMMARY: 23/23 checks passed
+==============================================================================

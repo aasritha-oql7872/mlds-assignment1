@@ -113,5 +113,15 @@
    queue resets to 0 + A, and the cycle repeats.
 
 ==============================================================================
-SUMMARY: 35/35 checks passed
+8. Boundary cases with exactly predictable answers
+==============================================================================
+[PASS] exactly K = 15 waiting: dispatch removes all 15, nobody left, cost 100: cost 100, next state {1: 0.2, 2: 0.2, 3: 0.2, 4: 0.2, 5: 0.2}
+[PASS] K + 1 = 16 waiting: dispatch leaves 1 behind, which still pays ch: cost 102: cost 102, next state {2: 0.2, 3: 0.2, 4: 0.2, 5: 0.2, 6: 0.2}
+[PASS] 198 waiting, hold: P(199) = 0.2 (A=1), P(200) = 0.8 (A>=2 overflow accumulates): {199: 0.2, 200: 0.8}
+[PASS] arrival pmf that sums to 0.9 is rejected: arrival pmf must be non-negative and sum to 1
+[PASS] arrival pmf that has a negative probability is rejected: arrival pmf must be non-negative and sum to 1
+[PASS] cf = 0: at s = 0 hold and dispatch tie exactly (dispatching nobody costs nothing): Q(hold) = 0.0000, Q(dispatch) = 0.0000
+
+==============================================================================
+SUMMARY: 41/41 checks passed
 ==============================================================================

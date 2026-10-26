@@ -27,7 +27,8 @@ class ShuttleMDP:
     arrivals: dict = field(default_factory=lambda: {a: 0.2 for a in range(1, 6)})
 
     def __post_init__(self):
-        assert abs(sum(self.arrivals.values()) - 1.0) < 1e-12, "arrival pmf must sum to 1"
+        if min(self.arrivals.values()) < 0 or abs(sum(self.arrivals.values()) - 1.0) > 1e-12:
+            raise ValueError("arrival pmf must be non-negative and sum to 1")
         self.states = np.arange(self.s_max + 1)
         self.n = len(self.states)
         self.C = np.zeros((2, self.n))          # C[a, s]

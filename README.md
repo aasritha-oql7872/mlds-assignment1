@@ -35,6 +35,7 @@ All commands run from the repository root. Outputs go to `results/`.
 | PG Part 1, Pong | `python pg/train.py --game pong` | hours | `results/pg/pong_part1/` |
 | PG Part 2, Pong (baseline) | `python pg/train.py --game pong --baseline` | hours | `results/pg/pong_part2/` |
 | PG validation | `python pg/validate_pg.py` (or `--quick`) | about 30 min (5 min) | `results/pg/validation/` |
+| PG edge cases | `python pg/validate_edge.py` (or `--quick`) | about 1 min | `results/pg/validation/edge_cases.txt` |
 | Re-plot everything | `python pg/plots.py` | seconds | all PG figures + `*_part1_vs_part2.png` |
 
 Each `pg/train.py` run trains, rolls out 500 evaluation episodes with the trained stochastic policy, and
@@ -62,12 +63,14 @@ Pong takes roughly 10 to 15 hours per run on CPU.
 ```
 dp/shuttle.py        MDP model, backward induction, value iteration, policy iteration
 dp/run_dp.py         Part 2 plots
-dp/validate_dp.py    Part 2 validation experiments (35 checks)
+dp/validate_dp.py    Part 2 validation experiments (41 checks)
 pg/reinforce.py      REINFORCE agent, value baseline, Pong pre-processing, train/eval loops
 pg/train.py          command-line entry point
 pg/plots.py          training curves, histograms, Part 1 vs Part 2 comparison
 pg/validate_pg.py    policy-gradient validation experiments (20 checks)
+pg/validate_edge.py  policy-gradient edge cases: CartPole/Pong boundaries, gradient identities (23 checks)
 run_deepdish.sh      one-command runner for the cluster
+report/              report.html (source), build.sh (HTML -> PDF with Chrome), report.pdf (submitted)
 ```
 
 ## Hyper-parameters

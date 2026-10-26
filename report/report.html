@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MLDS Assignment 1 Report</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  body { font: 10.5pt/1.45 "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; max-width: 182mm; margin: 0 auto; }
+  h1 { font-size: 20pt; margin: 0 0 4px; }
+  h2 { font-size: 14.5pt; margin: 22px 0 6px; padding-bottom: 3px; border-bottom: 2px solid #1f4e79; color: #1f4e79; break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 14px 0 4px; color: #1f4e79; break-after: avoid; }
+  p, ul, ol { margin: 5px 0; }
+  ul, ol { padding-left: 20px; }
+  code { font: 9pt Menlo, Consolas, monospace; background: #f1f3f5; padding: 0 3px; border-radius: 3px; }
+  pre { font: 8.8pt/1.35 Menlo, Consolas, monospace; background: #f1f3f5; padding: 7px 9px; border-radius: 4px; white-space: pre-wrap; margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 7px 0; font-size: 9.3pt; break-inside: avoid; }
+  th, td { border: 1px solid #c4cad0; padding: 3px 6px; text-align: left; vertical-align: top; }
+  th { background: #e8eef4; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  figure { margin: 8px 0; break-inside: avoid; text-align: center; }
+  figure img { max-width: 100%; }
+  figcaption { font-size: 9pt; color: #444; margin-top: 2px; }
+  .row { display: flex; gap: 8px; align-items: flex-start; }
+  .row figure { flex: 1; min-width: 0; margin: 4px 0; }
+  .box { border: 1px solid #c4cad0; background: #f7f9fb; padding: 6px 10px; margin: 8px 0; break-inside: avoid; }
+  .small { font-size: 9pt; color: #444; }
+  .pass { color: #1b7a34; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>MLDS Assignment 1: Dynamic Programming and Policy Gradients</h1>
+<p class="small">Value and policy iteration for shuttle dispatching; REINFORCE with and without a baseline on CartPole-v1 and Pong-v5.</p>
+
+<div class="box">
+<table>
+  <tr><th style="width:32%">GitHub username</th><td>aasritha-oql7872</td></tr>
+  <tr><th>Repository name</th><td>mlds-assignment1</td></tr>
+  <tr><th>Repository link</th><td><a href="https://github.com/aasritha-oql7872/mlds-assignment1">https://github.com/aasritha-oql7872/mlds-assignment1</a></td></tr>
+  <tr><th>NetID</th><td>oql7872</td></tr>
+</table>
+</div>
+
+<h2>1. How to run the code</h2>
+<pre>git clone https://github.com/aasritha-oql7872/mlds-assignment1.git && cd mlds-assignment1
+python3 -m venv .venv && source .venv/bin/activate        # Python 3.10 or 3.11
+pip install -r requirements.txt                           # torch, gymnasium, ale-py (has the Pong ROM)
+
+python dp/run_dp.py                              # Part 2: 3 solvers + 3 required plots
+python dp/validate_dp.py                         # Part 2: 41 validation checks
+python pg/train.py --game cartpole               # PG Part 1, CartPole
+python pg/train.py --game cartpole --baseline    # PG Part 2, CartPole
+python pg/train.py --game pong                   # PG Part 1, Pong (about 11 h on CPU)
+python pg/train.py --game pong --baseline        # PG Part 2, Pong (about 14 h on CPU)
+python pg/validate_pg.py                         # PG validation: 20 checks
+python pg/validate_edge.py                       # PG edge cases: 23 checks (about 1 min)
+python pg/plots.py                               # re-draw all PG figures and comparisons
+# each train.py run also rolls out 500 evaluation episodes and draws its plots
+# outputs: results/dp/, results/pg/&lt;run&gt;/, results/pg/validation/</pre>
+<p>On the deepdish cluster, <code>nohup bash run_deepdish.sh &gt; logs/all.log 2&gt;&amp;1 &amp;</code> runs everything in the background. The final Pong runs were done on a CPU on <code>mlds-deepdish2</code>
+(no GPU was used for them), because the policy network is tiny and acts once per frame, so an already-busy shared GPU only added queueing delay. Each run writes its own
+<code>config.json</code>, <code>train_log.csv</code>, <code>eval_rewards.txt</code>, <code>eval_stats.json</code>, <code>training_curve.png</code> and <code>eval_histogram.png</code> under <code>results/pg/&lt;run&gt;/</code>.
+Every figure in this report is read from those files.</p>
+
+<h2>2. Value and policy iteration: shuttle dispatching (Part 2)</h2>
+
+<h3>2.1 The MDP</h3>
+<table>
+  <tr><th style="width:24%">Component</th><th>Definition</th></tr>
+  <tr><td>State</td><td><i>s</i> in {0,...,200}: customers waiting at the start of a decision epoch (capped at 200 as the assignment allows).</td></tr>
+  <tr><td>Action</td><td><i>a</i> in {0 = hold, 1 = dispatch}.</td></tr>
+  <tr><td>Dispatch</td><td>A dispatched shuttle takes away min(<i>s</i>, K) customers, K = 15. Customers left behind: <i>post</i> = <i>s</i> &minus; <i>a</i>&middot;min(<i>s</i>, K).</td></tr>
+  <tr><td>Cost</td><td><i>c</i>(<i>s</i>,<i>a</i>) = c<sub>f</sub>&middot;<i>a</i> + c<sub>h</sub>&middot;<i>post</i>, with c<sub>f</sub> = 100 and c<sub>h</sub> = 2 (holding cost is charged on customers left waiting after the dispatch decision, as the assignment states).</td></tr>
+  <tr><td>Transition</td><td>Then A ~ Unif{1,2,3,4,5} customers arrive: <i>s'</i> = min(<i>post</i> + A, 200).</td></tr>
+  <tr><td>Objective</td><td>Minimise expected discounted cost, &gamma; = 0.95. (Equivalent to maximising reward = &minus;cost.)</td></tr>
+</table>
+<p><b>Assumptions stated.</b> (1) Customers who arrive when the station already holds 200 leave (balk), so the cap is a hard ceiling and no probability mass is lost. (2) Arrivals happen after the dispatch decision within a period, so a dispatch always acts on customers already waiting. (3) The problem is solved as cost minimisation. (4) Backward induction uses terminal value V<sub>T</sub> = 0 at T = 500.</p>
+
+<h3>2.2 The three solvers</h3>
+<ul>
+  <li><b>(a) Enumeration (backward induction), T = 500.</b> V<sub>500</sub> = 0; for t = 499,...,0: V<sub>t</sub>(<i>s</i>) = min<sub>a</sub> [ c(<i>s</i>,<i>a</i>) + &gamma; &Sigma;<sub>s'</sub> P(<i>s'</i>|<i>s</i>,<i>a</i>) V<sub>t+1</sub>(<i>s'</i>) ]. Plot V<sub>0</sub>.</li>
+  <li><b>(b) Value iteration, T = &infin;.</b> Iterate the same Bellman update from V = 0 until ||V<sub>k+1</sub> &minus; V<sub>k</sub>||<sub>&infin;</sub> &lt; &epsilon;(1&minus;&gamma;)/(2&gamma;) with &epsilon; = 10<sup>&minus;8</sup>, which guarantees an &epsilon;-optimal greedy policy. It stopped after 500 iterations.</li>
+  <li><b>(c) Policy iteration.</b> Exact policy evaluation by solving the linear system (I &minus; &gamma;P<sub>&pi;</sub>)V = c<sub>&pi;</sub>, then greedy improvement, with ties keeping the previous action so the loop must terminate. It converged in 6 rounds (states whose action changed per round: 196, 28, 22, 7, 1, 0).</li>
+</ul>
+
+<h3>2.3 Results</h3>
+<div class="row">
+  <figure><img src="../results/dp/a_enumeration_value.png"><figcaption>Figure 1. (a) Enumeration, T = 500: optimal value function at t = 0 versus customers waiting.</figcaption></figure>
+  <figure><img src="../results/dp/b_value_iteration_value.png"><figcaption>Figure 2. (b) Value iteration: optimal value function versus customers waiting.</figcaption></figure>
+</div>
+<figure style="max-width:120mm;margin:8px auto"><img src="../results/dp/c_policy_iteration_policy.png"><figcaption>Figure 3. (c) Policy iteration: optimal action versus customers waiting. The policy is a threshold policy: dispatch if and only if at least 13 customers are waiting.</figcaption></figure>
+
+<table>
+  <tr><th>Quantity</th><th class="n">Value</th></tr>
+  <tr><td>Optimal threshold (enumeration at t = 0, value iteration, policy iteration)</td><td class="n">13, 13, 13</td></tr>
+  <tr><td>V*(0)</td><td class="n">576.67</td></tr>
+  <tr><td>V*(13) = V*(14) = V*(15)</td><td class="n">676.67 = c<sub>f</sub> + V*(0)</td></tr>
+  <tr><td>V*(50), V*(100), V*(200)</td><td class="n">1001.5, 1709.0, 3821.6</td></tr>
+</table>
+<p><b>Reading the plots.</b> The value function rises with the queue length and is flat on 13&ndash;15, because dispatching there clears the whole queue and so costs exactly c<sub>f</sub> + V*(0). The threshold sits at 13, below the capacity of 15: with up to 5 arrivals per period, waiting at 13 could leave more than a shuttle-load at the next epoch, so it is better to go slightly before the shuttle is full.</p>
+
+<h3>2.4 Edge cases and how they are handled</h3>
+<table>
+  <tr><th style="width:30%">Edge case</th><th>Handling</th><th style="width:34%">Evidence (<code>results/dp/validation.txt</code>)</th></tr>
+  <tr><td>Queue at the 200 cap</td><td>Excess arrivals balk, so every transition row still sums to 1.</td><td>Max row-sum error 0; hold at <i>s</i>=200 stays at 200 with probability 1; at <i>s</i>=197 P(reach 200) = P(A&ge;3) = 0.6.</td></tr>
+  <tr><td>Dispatch with fewer than K waiting</td><td>Removes min(<i>s</i>, K), so the queue never goes negative.</td><td><i>s</i>=7, dispatch: next state in {1,...,5}, cost 100.</td></tr>
+  <tr><td>Dispatching an empty station</td><td>Allowed by the model, never optimal.</td><td>&pi;*(0) = hold; Q(0,hold) &minus; Q(0,dispatch) = &minus;100.</td></tr>
+  <tr><td>State 0 after an epoch</td><td>Unreachable because A &ge; 1.</td><td>Column 0 of P is all zeros.</td></tr>
+  <tr><td>End of the finite horizon</td><td>V<sub>T</sub> = 0, so near the end dispatching cannot recoup c<sub>f</sub>.</td><td>Last period: never dispatch, since 2&middot;15 = 30 &lt; 100. With 1&ndash;3 periods left the threshold is "never"; from 10 periods left it is 13.</td></tr>
+  <tr><td>Exactly K = 15 waiting</td><td>Dispatch removes all 15; nobody is left behind.</td><td>Cost 100; next state uniform on {1,...,5}.</td></tr>
+  <tr><td>K + 1 = 16 waiting</td><td>Dispatch takes 15 and leaves 1, which still pays the holding cost.</td><td>Cost 102 = 100 + 2&middot;1; next state uniform on {2,...,6}.</td></tr>
+  <tr><td>198 waiting, hold</td><td>Several arrival values hit the cap, so their probabilities must accumulate on state 200.</td><td>P(199) = 0.2 and P(200) = 0.8.</td></tr>
+  <tr><td>Invalid arrival probabilities</td><td>The model refuses to be built.</td><td>A pmf summing to 0.9, and one containing &minus;0.2, both raise an error.</td></tr>
+  <tr><td>c<sub>f</sub> = 0 at an empty station</td><td>Hold and dispatch cost the same, so ties must resolve consistently.</td><td>Q(hold) = Q(dispatch) = 0; ties go to hold.</td></tr>
+  <tr><td>Convergence and ties</td><td>Value iteration uses a stopping rule that bounds policy error; policy iteration keeps the old action on ties.</td><td>Greedy policy of V* reproduces V* (max difference 4.9e-9).</td></tr>
+</table>
+
+<h3>2.5 Tests that the algorithms are correct</h3>
+<p>All 41 checks pass (<span class="pass">41/41</span>); the last 6 are the boundary cases listed in the table above. Run with <code>python dp/validate_dp.py</code>. Each test asserts a prediction made <i>before</i> running it.</p>
+<table>
+  <tr><th style="width:27%">Test</th><th>What it does</th><th style="width:34%">Result</th></tr>
+  <tr><td>Independent solvers agree</td><td>Value iteration and policy iteration share no code beyond the model.</td><td>Values agree to 4.9e-9; both give threshold 13.</td></tr>
+  <tr><td>Bellman residual</td><td>Checks that V* satisfies V = T V directly.</td><td>||TV* &minus; V*|| = 2.5e-10.</td></tr>
+  <tr><td>Contraction</td><td>Successive value-iteration errors should shrink by at most &gamma; per step; also restarts from a random V.</td><td>Max ratio 0.9500; same fixed point from a random start (diff 9.7e-9).</td></tr>
+  <tr><td>Horizon sweep (Figure 6)</td><td>||V<sub>0</sub><sup>T</sup> &minus; V*|| should fall like &gamma;<sup>T</sup>.</td><td>Stays below &gamma;<sup>T</sup>||V*|| at every T tested: 3.4e3 at T=1, 0.02 at T=200, 0 at T=500.</td></tr>
+  <tr><td>Brute-force policy search</td><td>Evaluate every one of the 202 threshold policies exactly (Figure 5); and exhaustively search all 2<sup>12</sup> = 4096 policies of a 12-state instance.</td><td>Best threshold = 13, and V* &le; every threshold policy at every state; the exhaustive search matches policy iteration exactly.</td></tr>
+  <tr><td>Monte Carlo rollouts</td><td>Simulate the optimal policy 20,000 times and compare the discounted cost to V*.</td><td>From <i>s</i>=0, 13, 50, 150: |z| = 0.39, 1.70, 0.16, 1.90 (all within the 2-standard-error band).</td></tr>
+  <tr><td>Structure predicted by theory</td><td>V* should be non-decreasing in <i>s</i>; policy should be threshold-type.</td><td>Min increment 0.0; threshold structure confirmed.</td></tr>
+  <tr><td>Parameter changes with a predictable answer (Figure 4)</td><td>c<sub>f</sub>=0; c<sub>h</sub>=0; c<sub>f</sub>=10<sup>7</sup>; &gamma;=0 (policy then dispatches iff c<sub>h</sub>&middot;min(<i>s</i>,K) &gt; c<sub>f</sub>).</td><td>Thresholds 1 / never / never / never (matches the formula); &gamma;=0 with c<sub>f</sub>=20 gives threshold 11, exactly as predicted.</td></tr>
+</table>
+<p class="small"><b>A note on one number.</b> Enumeration and value iteration differ by exactly 0.0. That is not independent evidence: value iteration happened to stop after exactly 500 iterations, and 500 Bellman updates from V = 0 <i>are</i> backward induction with T = 500. The independent evidence is value iteration versus policy iteration, the Bellman residual, the brute-force searches and the simulation.</p>
+
+<h3>2.6 First 10 decision epochs under the optimal policy</h3>
+<p>Starting from an empty station (seed 1). Q is the expected discounted cost of each action under V*.</p>
+<table>
+  <tr><th>t</th><th class="n">s</th><th class="n">Q(hold)</th><th class="n">Q(dispatch)</th><th class="n">action</th><th class="n">cost</th><th class="n">A</th><th class="n">next s</th></tr>
+  <tr><td>0</td><td class="n">0</td><td class="n">576.67</td><td class="n">676.67</td><td class="n">hold</td><td class="n">0</td><td class="n">3</td><td class="n">3</td></tr>
+  <tr><td>1</td><td class="n">3</td><td class="n">607.61</td><td class="n">676.67</td><td class="n">hold</td><td class="n">6</td><td class="n">3</td><td class="n">6</td></tr>
+  <tr><td>2</td><td class="n">6</td><td class="n">633.62</td><td class="n">676.67</td><td class="n">hold</td><td class="n">12</td><td class="n">4</td><td class="n">10</td></tr>
+  <tr><td>3</td><td class="n">10</td><td class="n">660.12</td><td class="n">676.67</td><td class="n">hold</td><td class="n">20</td><td class="n">5</td><td class="n">15</td></tr>
+  <tr><td>4</td><td class="n">15</td><td class="n">701.67</td><td class="n">676.67</td><td class="n"><b>dispatch</b></td><td class="n">100</td><td class="n">1</td><td class="n">1</td></tr>
+  <tr><td>5</td><td class="n">1</td><td class="n">587.44</td><td class="n">676.67</td><td class="n">hold</td><td class="n">2</td><td class="n">1</td><td class="n">2</td></tr>
+  <tr><td>6</td><td class="n">2</td><td class="n">597.77</td><td class="n">676.67</td><td class="n">hold</td><td class="n">4</td><td class="n">5</td><td class="n">7</td></tr>
+  <tr><td>7</td><td class="n">7</td><td class="n">641.57</td><td class="n">676.67</td><td class="n">hold</td><td class="n">14</td><td class="n">5</td><td class="n">12</td></tr>
+  <tr><td>8</td><td class="n">12</td><td class="n">672.89</td><td class="n">676.67</td><td class="n">hold</td><td class="n">24</td><td class="n">2</td><td class="n">14</td></tr>
+  <tr><td>9</td><td class="n">14</td><td class="n">690.40</td><td class="n">676.67</td><td class="n"><b>dispatch</b></td><td class="n">100</td><td class="n">2</td><td class="n">2</td></tr>
+</table>
+<p>The queue grows by the arrivals each period and the agent holds, paying 2 per waiting customer, until Q(dispatch) drops below Q(hold), which first happens at <i>s</i> &ge; 13. It then pays 100, the queue resets, and the cycle repeats. Q(dispatch) is constant at 676.67 = c<sub>f</sub> + V*(0) whenever <i>s</i> &le; 15, as it should be.</p>
+
+<div class="row">
+  <figure><img src="../results/dp/validation_sensitivity.png"><figcaption>Figure 4. Optimal threshold as c<sub>f</sub> and c<sub>h</sub> change: it rises with the dispatch cost and falls with the holding cost, as predicted.</figcaption></figure>
+  <figure><img src="../results/dp/validation_threshold_enumeration.png"><figcaption>Figure 5. V(0) of every threshold policy; the minimum is at 13, where dynamic programming puts it.</figcaption></figure>
+</div>
+<figure style="max-width:110mm;margin:8px auto"><img src="../results/dp/vi_convergence.png"><figcaption>Figure 6. Value iteration: the change per iteration falls geometrically (a straight line on the log scale), as the contraction argument predicts.</figcaption></figure>
+
+<h3>2.7 Given an additional 3 months, what other validation would I do? (Part 2)</h3>
+<ul>
+  <li><b>Check the modelling assumptions, not only the solvers.</b> Re-solve with other conventions (holding cost on customers before dispatch, arrivals before the decision, customers queueing instead of balking at the cap) and report how much the threshold of 13 moves.</li>
+  <li><b>Sensitivity to the arrival distribution.</b> Estimate arrivals from real data (non-uniform, time-of-day dependent) and test how a policy optimal for Unif{1..5} performs under the true process; add a robust or Bayesian variant.</li>
+  <li><b>Larger capacity and cap.</b> Vary K and the 200 cap, and a multi-shuttle or multi-stop version, to confirm that the threshold structure persists and that the cap never binds under the optimal policy.</li>
+  <li><b>Independent implementations.</b> Cross-check against a second implementation (for example a linear-programming formulation of the MDP) and against an off-the-shelf MDP toolbox.</li>
+  <li><b>Statistical depth.</b> More Monte Carlo seeds with confidence intervals, and a check of the discount-factor trade-off (&gamma; &rarr; 1 average-cost limit).</li>
+</ul>
+
+<h2>3. Policy gradient, Part 1: REINFORCE (CartPole-v1 and Pong-v5)</h2>
+
+<h3>3.1 Method</h3>
+<p>The policy &pi;<sub>&theta;</sub>(a|s) is a one-hidden-layer ReLU network with a softmax output. After each batch of N episodes we take one Adam step on the loss</p>
+<p style="text-align:center">L(&theta;) = &minus; (1/N) &Sigma;<sub>episodes</sub> &Sigma;<sub>t</sub> log &pi;<sub>&theta;</sub>(a<sub>t</sub>|s<sub>t</sub>) &middot; G<sub>t</sub>, &nbsp; G<sub>t</sub> = r<sub>t</sub> + &gamma; G<sub>t+1</sub>,</p>
+<p>so &minus;&nabla;L is the reward-to-go REINFORCE estimate of the policy gradient of the discounted return J = E[&Sigma;<sub>t</sub> &gamma;<sup>t</sup> r<sub>t</sub>] (with the usual convention described in the note below). Using the return from step t onward (rather than from the start of the episode) is valid because later actions cannot change earlier rewards, and it removes noise.</p>
+<table>
+  <tr><th></th><th>CartPole-v1</th><th>Pong-v5 (<code>ALE/Pong-v5</code>)</th></tr>
+  <tr><td>Discount &gamma;</td><td>0.95</td><td>0.99</td></tr>
+  <tr><td>Policy network</td><td>4 &rarr; 128 &rarr; 2</td><td>6400 &rarr; 200 &rarr; 2</td></tr>
+  <tr><td>Optimiser</td><td>Adam, lr 0.003</td><td>Adam, lr 0.001</td></tr>
+  <tr><td>Episodes per update N</td><td>1</td><td>10</td></tr>
+  <tr><td>Training episodes</td><td>1000</td><td>10,000</td></tr>
+  <tr><td>Input</td><td>the 4 state variables</td><td>difference of consecutive 80&times;80 frames from the given <code>preprocess</code></td></tr>
+  <tr><td>Actions</td><td>left, right</td><td>only RIGHT (2) and LEFT (3); output 0 &rarr; 2, output 1 &rarr; 3</td></tr>
+</table>
+<p><b>Learning rate.</b> The assignment suggests 0.01 and allows another value with justification. For CartPole I used 0.003 because 0.01 sometimes collapses a run to a near-random policy (one of five seeds ended at an evaluation mean of 9 with the baseline, another at 16 without it; see Table 3). Pong uses 0.001 with larger batches, since one update there averages about 50,000 decisions.</p>
+<p><b>Pong-specific choices.</b></p>
+<ul>
+  <li><b>Difference frames.</b> One frame carries no motion information; subtracting the previous frame shows the ball's direction. The first frame of an episode has no predecessor, so its input is all zeros.</li>
+  <li><b>Returns restart at every point.</b> Each +1 / &minus;1 ends a rally and the ball is re-served. With &gamma; = 0.99 an action would otherwise be credited or blamed for the outcome of unrelated later rallies. This sharpens credit assignment. Training and evaluation scores in the figures are still the raw game score (&minus;21 to +21).</li>
+  <li><b>No 1000-step episode cap.</b> A Pong game lasts about 1,000 to 5,000 agent steps once the agent is competent, so a 1000-step cap would truncate games in the middle. CartPole's own 500-step limit is treated as terminal.</li>
+  <li><b>Environment library.</b> <code>gymnasium</code> + <code>ale-py</code> (<code>ALE/Pong-v5</code>, frame-skip 4, sticky actions 0.25) instead of <code>gym[atari]</code>, which needs a separate ROM licence step. The assignment requires Pong-v5, which is this version.</li>
+</ul>
+<p><b>A note on discounting.</b> The lecture notes weight each reward in the step-t term by &gamma;<sup>t'&minus;t</sup> (reward-to-go measured from t), which is what is implemented here. The Lab 4 formula uses &gamma;<sup>t'</sup> with the absolute step index, which multiplies the step-t term by an extra &gamma;<sup>t</sup>. That extra factor is what the exact gradient of the discounted return contains; dropping it, as the lecture form does, weights late steps of an episode more heavily and gives every step the same effective horizon. I used the lecture form, which is also the common practical choice.</p>
+<p><b>Evaluation.</b> After training, 500 episodes are rolled out with the trained stochastic policy, on seeds never used in training. The histogram, mean and standard deviation (sample, ddof=1) are reported.</p>
+
+<h3>3.2 CartPole-v1 results (&gamma; = 0.95)</h3>
+<div class="row">
+  <figure><img src="../results/pg/cartpole_part1/training_curve.png"><figcaption>Figure 7. CartPole, Part 1: episode reward during training with the 100-episode moving average.</figcaption></figure>
+  <figure><img src="../results/pg/cartpole_part1/eval_histogram.png"><figcaption>Figure 8. CartPole, Part 1: histogram of 500 evaluation episodes.</figcaption></figure>
+</div>
+<table>
+  <tr><th>CartPole, Part 1 (no baseline)</th><th class="n">Mean</th><th class="n">Std</th></tr>
+  <tr><td>500 evaluation episodes (maximum possible score is 500)</td><td class="n">487.5</td><td class="n">56.4</td></tr>
+</table>
+
+<h3>3.3 Pong-v5 results (&gamma; = 0.99)</h3>
+<div class="row">
+  <figure><img src="../results/pg/pong_part1/training_curve.png"><figcaption>Figure 9. Pong, Part 1: episode reward during training with the 100-episode moving average.</figcaption></figure>
+  <figure><img src="../results/pg/pong_part1/eval_histogram.png"><figcaption>Figure 10. Pong, Part 1: histogram of 500 evaluation episodes.</figcaption></figure>
+</div>
+<table>
+  <tr><th>Pong, Part 1 (no baseline)</th><th class="n">Mean</th><th class="n">Std</th></tr>
+  <tr><td>500 evaluation episodes (score ranges from &minus;21 to +21)</td><td class="n">13.28</td><td class="n">3.70</td></tr>
+  <tr><td>Reference: uniformly random RIGHT/LEFT policy (20 episodes)</td><td class="n">&minus;20.35</td><td class="n">0.96</td></tr>
+</table>
+<p>The agent started at the random-policy level (about &minus;20) and learned to beat the built-in opponent in almost every game: the evaluation scores lie between about +2 and +21, with none near &minus;20. Learning begins only after about 2,000 episodes, once the paddle first connects with the ball often enough to produce a signal.</p>
+
+<h3>3.4 Edge cases (Part 1)</h3>
+<table>
+  <tr><th style="width:28%">Edge case</th><th>Handling</th><th style="width:33%">Evidence (<code>results/pg/validation/validation.txt</code>)</th></tr>
+  <tr><td>Return computation</td><td>Backward recursion G<sub>t</sub> = r<sub>t</sub> + &gamma;G<sub>t+1</sub>.</td><td>r = [1,1,1], &gamma; = 0.5 gives [1.75, 1.5, 1]; a one-step episode gives G<sub>0</sub> = r<sub>0</sub>.</td></tr>
+  <tr><td>CartPole's 500-step limit</td><td>Treated as terminal (no bootstrapping).</td><td>G<sub>0</sub> = (1 &minus; 0.95<sup>500</sup>)/0.05 = 20.0000; only the last ~60 steps get a lower G.</td></tr>
+  <tr><td>Pong rallies</td><td>Return restarts after each scored point.</td><td>Rewards [..., &minus;1, ..., +1] give returns [&minus;0.98, &minus;0.99, &minus;1.0, +0.99, +1.0].</td></tr>
+  <tr><td>Pong first frame</td><td>No previous frame, so the input is zeros.</td><td>Checked: first input of an episode is all zeros.</td></tr>
+  <tr><td>Pong pre-processing</td><td>The given function is used; a <code>.copy()</code> stops it modifying the environment's frame in place.</td><td>Output is 80&times;80 binary float32; only 0.53% of pixels are on (paddles and ball); the environment's frame is unchanged.</td></tr>
+  <tr><td>Pong action mapping</td><td>Network output 0 &rarr; action 2 (RIGHT), 1 &rarr; 3 (LEFT).</td><td>Run on the real game: RIGHT moves the paddle row 34 &rarr; 1 (up), LEFT moves it 34 &rarr; 78 (down).</td></tr>
+  <tr><td>CartPole termination</td><td>The episode ends when the pole falls or the cart leaves the track, whichever comes first.</td><td>Always pushing left: ends after 11 steps at angle 0.26 (limit 0.21), terminated. A cart placed at x = 2.39 with the pole upright: ends with x = 2.43, terminated.</td></tr>
+  <tr><td>CartPole time limit</td><td>A hand-written balancing controller reaches the limit; that is truncation, not failure, and the return is computed as for a finished episode.</td><td>500 steps, truncated = True, terminated = False; G<sub>0</sub> = 20.000, G<sub>499</sub> = 1.</td></tr>
+  <tr><td>Episode separation</td><td>Each episode starts from a fresh reset; nothing carries over.</td><td>Same seed gives an identical episode (inputs and rewards).</td></tr>
+  <tr><td>Identical Pong frames</td><td>Frame difference must be zero.</td><td>Difference is exactly 0.</td></tr>
+  <tr><td>Moving ball</td><td>The difference should show +1 where the ball arrived and &minus;1 where it left, in a few pixels.</td><td>Median 26 changed pixels per step out of 6400.</td></tr>
+  <tr><td>A point versus the end of the game</td><td>Scoring a point must not end the episode; the game ends when one side reaches 21.</td><td>One random-policy game: 22 points scored in 1043 steps; ended with 1 win and 21 losses, terminated.</td></tr>
+  <tr><td>Return around a point boundary</td><td>Rewards [0,0,+1,0,0,&minus;1] form two segments.</td><td>G = [0.9801, 0.99, 1, &minus;0.9801, &minus;0.99, &minus;1]. Changing the second point to &minus;5 leaves the first three returns unchanged; without the reset, G<sub>0</sub> would be 0.029 instead of 0.980.</td></tr>
+  <tr><td>Action probabilities</td><td>Finite, non-negative, summing to 1 for any input; stable when the policy is almost deterministic.</td><td>256 random inputs per game: row sums within 1.2e-7. A rare action with P = e<sup>&minus;400</sup> gives a finite loss (400.0) and finite gradient.</td></tr>
+  <tr><td>Return normalisation</td><td>Not applicable: returns are not normalised, so there is no division by a zero variance.</td><td>&mdash;</td></tr>
+  <tr><td>Training versus evaluation</td><td>Evaluation episodes use seeds never seen in training.</td><td>Training seeds 0&ndash;9,999; evaluation seeds start at 10<sup>9</sup>.</td></tr>
+</table>
+
+<h3>3.5 Tests of correctness (Part 1)</h3>
+<p>Two scripts, both passing. <code>python pg/validate_pg.py</code> (<span class="pass">20/20</span>; <code>--quick</code> for a shorter version) holds the learning-behaviour tests below. <code>python pg/validate_edge.py</code> (<span class="pass">23/23</span>, about a minute; log in <code>results/pg/validation/edge_cases.txt</code>) holds the edge cases in the table above, plus the gradient and training checks in Section 4.5 and a repeated negative control.</p>
+<table>
+  <tr><th style="width:26%">Test</th><th>What it does and the prediction</th><th style="width:30%">Result</th></tr>
+  <tr><td>Exact-gradient test</td><td>One-step problem where the true policy gradient can be computed in closed form. The average of many REINFORCE gradients must equal it.</td><td>Cosine 0.986 with the exact gradient; worst |z| over 42 parameters is 1.84, within sampling noise.</td></tr>
+  <tr><td>Corridor toy task (Figure 11)</td><td>Deterministic corridor of length 6; the optimal path takes 6 steps. A correct learner must find it.</td><td>P(right) &gt; 0.99 in every cell; greedy path = 6 steps.</td></tr>
+  <tr><td>Negative control (Figure 12)</td><td>Shuffle each episode's returns, destroying credit assignment. Learning should be far slower and stay near random play (about 22).</td><td>Seed 1, episodes 301&ndash;400: true returns 351.9, shuffled 13.6. Repeated on 5 more seeds: shuffled/true = 0.26, 0.28, 0.33, 0.17, 0.34. Shuffled agents end at 34&ndash;71, above random (22), because shuffling keeps each episode's total return. A first version with 300 episodes gave 0.53 on one seed, because the true agent had not yet learned by then; the horizon was returned to the original 400.</td></tr>
+  <tr><td>First 10 steps (Table 2)</td><td>Print states, action probabilities, returns for one episode; the agent should push toward the side the pole is falling.</td><td>corr(pole angular velocity, P(right)) = 0.938 over 217 steps.</td></tr>
+  <tr><td>Pong random-policy reference</td><td>A random RIGHT/LEFT policy gives the number any learning curve has to beat.</td><td>&minus;20.35 &plusmn; 0.96, against +13.28 after training.</td></tr>
+</table>
+<div class="row">
+  <figure><img src="../results/pg/validation/corridor.png"><figcaption>Figure 11. Corridor toy task: episode length falls to the known optimum of 6 steps, with and without a baseline.</figcaption></figure>
+  <figure><img src="../results/pg/validation/negative_control.png"><figcaption>Figure 12. Negative control: with shuffled returns the agent does not learn.</figcaption></figure>
+</div>
+
+<h3>3.6 Given an additional 3 months, what other validation would I do? (Part 1)</h3>
+<ul>
+  <li><b>Many seeds with confidence intervals.</b> The headline curves are one training seed each (Pong costs about 11 to 14 hours per run). I would run at least 10 seeds per setting, report mean &plusmn; confidence interval, and test differences formally.</li>
+  <li><b>Hyper-parameter sweeps</b> over learning rate, batch size, hidden width and discount, with the budget held fixed, to show the choices are not tuned to one lucky seed.</li>
+  <li><b>Pong ablations</b> of the design choices: no frame difference (single frame), returns not restarted at each point, a 1000-step cap, and sticky actions on versus off.</li>
+  <li><b>Policy quality beyond the average score:</b> win rate against the opponent, longest rally, and evaluation with a greedy (arg-max) policy as well as the stochastic one.</li>
+  <li><b>Stability checks:</b> longer training to see whether the CartPole dips seen in Figure 7 persist, entropy and gradient-norm tracking, and gradient clipping.</li>
+  <li><b>Cross-checking against a reference implementation</b> (for example a library policy-gradient baseline) on the same environments.</li>
+</ul>
+
+<h2>4. Policy gradient, Part 2: REINFORCE with a baseline</h2>
+
+<h3>4.1 Baseline chosen and how it is implemented</h3>
+<p>I use a <b>learned, state-dependent baseline</b>: a second network V<sub>&phi;</sub>(s) with the same shape as the policy network but one output (4 &rarr; 128 &rarr; 1 for CartPole, 6400 &rarr; 200 &rarr; 1 for Pong), trained by mean-squared error to predict the reward-to-go, with its own Adam optimiser at the same learning rate as the policy. The policy gradient then uses the advantage:</p>
+<p style="text-align:center">&nabla;J &asymp; (1/N) &Sigma;<sub>episodes</sub> &Sigma;<sub>t</sub> &nabla; log &pi;<sub>&theta;</sub>(a<sub>t</sub>|s<sub>t</sub>) &middot; ( G<sub>t</sub> &minus; V<sub>&phi;</sub>(s<sub>t</sub>) )</p>
+<p>The only difference from Part 1 in the code is one line (<code>adv = G - v.detach()</code> instead of <code>adv = G</code>), plus the value-network update. The baseline's value is detached so the policy gradient does not flow into V<sub>&phi;</sub>.</p>
+<p><b>Why this keeps the gradient unbiased.</b> V<sub>&phi;</sub>(s<sub>t</sub>) depends only on the state, not on the action taken, and E<sub>a~&pi;</sub>[&nabla; log &pi;(a|s)] = 0, so subtracting it adds zero in expectation while removing a state-dependent offset from G<sub>t</sub>. <b>Why a state-dependent baseline rather than a constant:</b> in CartPole every reward is +1, so every return is positive and a constant baseline can only remove a global average. V(s) captures how good the current state is (for CartPole, how far from failing), so the advantage G &minus; V(s) says whether this action did better or worse than usual from here. The lecture's constant baseline and the optimal B(s) = V<sup>&pi;</sup>(s) are the two ends of this choice; this is the second. All other settings (&gamma;, learning rate, batch size, number of episodes, seeds) are identical to Part 1.</p>
+
+<h3>4.2 CartPole-v1 results (&gamma; = 0.95)</h3>
+<div class="row">
+  <figure><img src="../results/pg/cartpole_part2/training_curve.png"><figcaption>Figure 13. CartPole, Part 2 (baseline): episode reward with the 100-episode moving average.</figcaption></figure>
+  <figure><img src="../results/pg/cartpole_part2/eval_histogram.png"><figcaption>Figure 14. CartPole, Part 2 (baseline): histogram of 500 evaluation episodes.</figcaption></figure>
+</div>
+
+<h3>4.3 Pong-v5 results (&gamma; = 0.99)</h3>
+<div class="row">
+  <figure><img src="../results/pg/pong_part2/training_curve.png"><figcaption>Figure 15. Pong, Part 2 (baseline): episode reward with the 100-episode moving average.</figcaption></figure>
+  <figure><img src="../results/pg/pong_part2/eval_histogram.png"><figcaption>Figure 16. Pong, Part 2 (baseline): histogram of 500 evaluation episodes.</figcaption></figure>
+</div>
+
+<h3>4.4 Part 1 versus Part 2</h3>
+<table>
+  <tr><th>Evaluation, 500 episodes</th><th class="n">Part 1: mean (std)</th><th class="n">Part 2 (baseline): mean (std)</th></tr>
+  <tr><td>CartPole-v1 (maximum 500)</td><td class="n">487.5 (56.4)</td><td class="n">485.6 (49.3)</td></tr>
+  <tr><td>Pong-v5 (range &minus;21 to +21)</td><td class="n">13.28 (3.70)</td><td class="n">12.23 (3.75)</td></tr>
+</table>
+<div class="row">
+  <figure><img src="../results/pg/cartpole_part1_vs_part2.png"><figcaption>Figure 17. CartPole: learning curves (left) and the variability of the gradient norm (right, log scale), with and without the baseline.</figcaption></figure>
+</div>
+<div class="row">
+  <figure><img src="../results/pg/pong_part1_vs_part2.png"><figcaption>Figure 18. Pong: learning curves (left) and variability of the gradient norm (right), with and without the baseline.</figcaption></figure>
+</div>
+<p><b>What the evidence says, and what it does not.</b></p>
+<ul>
+  <li><b>Gradient variance is lower with the baseline.</b> On CartPole the variability of the gradient norm is roughly three times lower during most of training (Figure 17, right); measured at a fixed policy, the per-episode gradient variance falls by 5.2&times; (Section 4.6), and in the exact-gradient test by 201&times;.</li>
+  <li><b>Faster early learning.</b> On Pong the baseline run climbs out of the random-play level sooner (it reaches a 100-episode average of &minus;5 after about 1,800 episodes, against about 2,600 without it; Figure 18). On CartPole its curve is above plain REINFORCE between about episodes 200 and 700 (Figure 17).</li>
+  <li><b>Final scores are about the same, and on Pong the baseline is slightly lower.</b> The CartPole runs tie (485.6 vs 487.5) and on Pong Part 1 ends about one point higher (13.28 vs 12.23). Each is one training seed, so this difference should not be over-read; the evaluation standard error (about 0.17 on Pong) only reflects evaluation noise, not the seed-to-seed spread in training.</li>
+  <li><b>Over 5 CartPole seeds (Table 3)</b> the baseline gives a higher average last-100 training reward (321.5 vs 223.6 at lr 0.003; 241.6 vs 85.2 at lr 0.01), and the per-seed spread is large in both groups. The evaluation means of the final policies (251 vs 209) are not statistically distinguishable with five seeds (a Welch t statistic of about 0.5).</li>
+  <li><b>Plausible reasons the baseline helps less on Pong</b> (hypotheses, not tested here): returns already restart at each point and stay between about &minus;1 and +1, so there is less variance to remove; each update averages ten long episodes; and a 6400-input value network is slower to fit than the policy.</li>
+</ul>
+<p>Both methods also show the instability typical of vanilla policy gradients on CartPole: the 100-episode average can drop sharply after reaching 400+ (Figures 7, 13, 17), which is why a single curve should not be read as a reliable ranking.</p>
+
+<h3>4.5 Edge cases (Part 2)</h3>
+<table>
+  <tr><th style="width:30%">Edge case</th><th>Handling</th><th style="width:30%">Evidence</th></tr>
+  <tr><td>Baseline must not depend on the action</td><td>V(s) takes only the state; it is detached in the policy loss.</td><td>Difference between baseline and no-baseline gradient estimates has mean zero (Section 4.6).</td></tr>
+  <tr><td>The value network is only an estimate of E[G|s]</td><td>Any function of the state alone keeps the gradient unbiased, so errors in V<sub>&phi;</sub> cost variance, not correctness.</td><td>Table 2: V &asymp; 17 while this episode's G = 20 (the value network averages over all episodes, and this one survived longer than average), yet the zero-mean-difference test below still passes.</td></tr>
+  <tr><td>Value network lagging the policy at the start</td><td>It is trained every update from the first one; early advantages are mostly G.</td><td>Training curves: the baseline run learns at least as fast early on.</td></tr>
+  <tr><td>CartPole's 500-step limit and Pong's reset-per-point returns</td><td>Same returns as Part 1 are used as the regression target.</td><td>Same return tests as Section 3.4.</td></tr>
+  <tr><td>Pong frame input</td><td>Same difference-frame input; the value network sees the same input as the policy.</td><td>Same pipeline checks as Section 3.4.</td></tr>
+  <tr><td>Advantage equal to zero</td><td>If the baseline predicts every return exactly, the policy update vanishes.</td><td>Gradient is exactly zero (all returns zero, and G = V, tested separately).</td></tr>
+  <tr><td>Advantage must be a constant for the policy loss</td><td>It is detached, so the policy loss cannot train the value network.</td><td>The advantage passed to the policy loss has requires_grad = False; the value network still changes through its own MSE loss.</td></tr>
+  <tr><td>Evaluation versus training</td><td>Evaluation must not update any weights; training must.</td><td>Weights identical before and after 5 evaluation episodes; changed by training (mean |change| 0.017). All weights of both networks finite after training.</td></tr>
+</table>
+
+<h3>4.6 Tests of correctness (Part 2)</h3>
+<table>
+  <tr><th style="width:26%">Test</th><th>What it does and the prediction</th><th style="width:30%">Result</th></tr>
+  <tr><td>Exact-gradient test with baseline</td><td>Same closed-form problem as Part 1; the baseline must leave the mean unchanged and lower the variance.</td><td>Cosine with the exact gradient 1.000 (worst |z| 1.21); total variance 115.45 &rarr; 0.573 (201&times; smaller).</td></tr>
+  <tr><td>Unbiasedness on CartPole</td><td>At one fixed policy, compare the per-episode gradients with and without the baseline over 300 episodes: their difference should have zero mean.</td><td>0.0% of 898 parameters have |z| &gt; 2.58 (about 1% expected by chance).</td></tr>
+  <tr><td>Variance reduction on CartPole</td><td>Same fixed policy, total gradient variance with and without the baseline.</td><td>5.2&times; lower with the baseline.</td></tr>
+  <tr><td>Corridor toy task</td><td>Both versions must still find the 6-step optimum.</td><td>Both do (Figure 11), P(right) &gt; 0.99 everywhere.</td></tr>
+  <tr><td>Multi-seed, multi-learning-rate table</td><td>5 seeds &times; 2 learning rates &times; with/without baseline, 1000 episodes each (Table 3, Figure 19).</td><td>Baseline has the higher average at both learning rates.</td></tr>
+  <tr><td>Identity checks (<code>validate_edge.py</code>)</td><td>All returns zero gives a zero gradient; a baseline that equals the returns gives zero advantage and a zero gradient; the advantage is detached.</td><td>All pass (Section 4.5).</td></tr>
+  <tr><td>First 10 steps (Table 2)</td><td>Print V(s), G and the advantage G &minus; V for the first steps of a Part 2 episode.</td><td>V(s) &asymp; 17 against G = 20, advantage about +2.5 on every step, and P(right) tracks the pole's motion.</td></tr>
+</table>
+<table>
+  <tr><th colspan="8">Table 2. First 10 steps of one CartPole episode, Part 2 agent (G is the discounted return; V the baseline)</th></tr>
+  <tr><th class="n">t</th><th class="n">x</th><th class="n">x&#775;</th><th class="n">&theta;</th><th class="n">&theta;&#775;</th><th class="n">P(right)</th><th class="n">G</th><th class="n">V, G&minus;V</th></tr>
+  <tr><td class="n">0</td><td class="n">0.018</td><td class="n">&minus;0.045</td><td class="n">&minus;0.028</td><td class="n">&minus;0.032</td><td class="n">0.438</td><td class="n">20.00</td><td class="n">17.01, 2.99</td></tr>
+  <tr><td class="n">1</td><td class="n">0.017</td><td class="n">0.151</td><td class="n">&minus;0.029</td><td class="n">&minus;0.333</td><td class="n">0.138</td><td class="n">20.00</td><td class="n">17.34, 2.66</td></tr>
+  <tr><td class="n">2</td><td class="n">0.020</td><td class="n">&minus;0.044</td><td class="n">&minus;0.035</td><td class="n">&minus;0.049</td><td class="n">0.407</td><td class="n">20.00</td><td class="n">17.07, 2.93</td></tr>
+  <tr><td class="n">3</td><td class="n">0.019</td><td class="n">0.152</td><td class="n">&minus;0.036</td><td class="n">&minus;0.353</td><td class="n">0.123</td><td class="n">20.00</td><td class="n">17.45, 2.55</td></tr>
+  <tr><td class="n">4</td><td class="n">0.023</td><td class="n">&minus;0.043</td><td class="n">&minus;0.043</td><td class="n">&minus;0.072</td><td class="n">0.369</td><td class="n">20.00</td><td class="n">17.15, 2.85</td></tr>
+  <tr><td class="n">5</td><td class="n">0.022</td><td class="n">0.153</td><td class="n">&minus;0.045</td><td class="n">&minus;0.378</td><td class="n">0.108</td><td class="n">20.00</td><td class="n">17.58, 2.42</td></tr>
+  <tr><td class="n">6</td><td class="n">0.025</td><td class="n">&minus;0.042</td><td class="n">&minus;0.052</td><td class="n">&minus;0.100</td><td class="n">0.325</td><td class="n">20.00</td><td class="n">17.25, 2.75</td></tr>
+  <tr><td class="n">7</td><td class="n">0.024</td><td class="n">&minus;0.236</td><td class="n">&minus;0.054</td><td class="n">0.176</td><td class="n">0.651</td><td class="n">20.00</td><td class="n">17.35, 2.65</td></tr>
+  <tr><td class="n">8</td><td class="n">0.019</td><td class="n">&minus;0.040</td><td class="n">&minus;0.051</td><td class="n">&minus;0.133</td><td class="n">0.286</td><td class="n">20.00</td><td class="n">17.34, 2.66</td></tr>
+  <tr><td class="n">9</td><td class="n">0.018</td><td class="n">&minus;0.234</td><td class="n">&minus;0.053</td><td class="n">0.143</td><td class="n">0.614</td><td class="n">20.00</td><td class="n">17.41, 2.59</td></tr>
+</table>
+<p class="small">G = 20.00 in every row because the episode ran 217 steps: for &gamma; = 0.95, (1 &minus; 0.95<sup>217</sup>)/0.05 &asymp; 20. P(right) is high when the pole is tipping right (&theta;&#775; &gt; 0) and low when it tips left.</p>
+
+<table>
+  <tr><th colspan="5">Table 3. CartPole, 5 seeds, 1000 episodes (<code>results/pg/validation/validation.txt</code>, section 6)</th></tr>
+  <tr><th>Setting</th><th class="n">Last-100 training mean</th><th class="n">Evaluation mean</th><th colspan="2">Per-seed evaluation means</th></tr>
+  <tr><td>lr 0.01, no baseline</td><td class="n">85.2</td><td class="n">64.1</td><td colspan="2">115, 47, 16, 49, 93</td></tr>
+  <tr><td>lr 0.01, baseline</td><td class="n">241.6</td><td class="n">176.4</td><td colspan="2">500, 183, 9, 125, 64</td></tr>
+  <tr><td>lr 0.003, no baseline</td><td class="n">223.6</td><td class="n">209.3</td><td colspan="2">239, 470, 112, 107, 118</td></tr>
+  <tr><td>lr 0.003, baseline</td><td class="n">321.5</td><td class="n">250.8</td><td colspan="2">488, 155, 203, 186, 223</td></tr>
+</table>
+<figure style="max-width:150mm;margin:8px auto"><img src="../results/pg/validation/cartpole_seeds.png"><figcaption>Figure 19. CartPole, five seeds per setting: 100-episode moving averages with (red) and without (blue) the baseline. The baseline runs learn earlier but both groups oscillate and differ a lot between seeds.</figcaption></figure>
+
+<h3>4.7 Given an additional 3 months, what other validation would I do? (Part 2)</h3>
+<ul>
+  <li><b>Compare baselines properly,</b> with equal tuning effort: no baseline, a constant (running-mean) baseline, the lecture's optimal constant baseline (returns weighted by squared gradient norm), the learned V(s), and generalised advantage estimation, on at least 10 seeds each, with confidence intervals.</li>
+  <li><b>Measure variance directly during training,</b> at many checkpoints along the run and not only at one fixed policy, and check that its reduction translates into faster or more reliable learning.</li>
+  <li><b>Baseline quality:</b> track the value network's explained variance, sweep its learning rate and number of updates per batch, and test a shared-trunk network.</li>
+  <li><b>Pong without the reset-per-point trick,</b> where the returns are larger and the baseline should matter more, to test the hypothesis above.</li>
+  <li><b>Normalising advantages</b> and adding an entropy bonus, which commonly stabilise policy gradients, and checking whether they remove the dips in the CartPole curves.</li>
+</ul>
+
+<h2>5. Summary</h2>
+<ul>
+  <li><b>Shuttle MDP:</b> enumeration, value iteration and policy iteration agree: dispatch iff at least 13 customers are waiting; V*(0) = 576.67. 41 of 41 checks pass.</li>
+  <li><b>REINFORCE:</b> CartPole is solved (mean 487.5 of a maximum 500); Pong is learned to a mean of +13.28 against &minus;20.35 for random play. 20 of 20 learning checks and 23 of 23 edge-case checks pass.</li>
+  <li><b>Baseline:</b> reduces gradient variance (5.2&times; on CartPole, 201&times; in the exact test) and speeds up early learning, but at the budgets used it does not clearly improve the final score on either game.</li>
+</ul>
+
+</body>
+</html>

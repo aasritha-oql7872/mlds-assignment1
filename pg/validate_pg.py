@@ -146,20 +146,24 @@ def test_corridor():
     return curves
 
 
+def control_run(seed, shuffle, episodes=400):
+    """CartPole REINFORCE (no baseline); with shuffle=True each episode's returns are permuted,
+    which keeps their values but destroys which step they belong to. Returns episode rewards."""
+    cfg = make_config("cartpole", False, seed=seed)
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    agent, env, ep_rewards = make_agent(cfg), gym.make(cfg.env), []
+    for ep in range(episodes):
+        xs, acts, rews = run_episode(env, agent, cfg, seed=ep)
+        G = discounted_returns(rews, cfg.gamma)
+        agent.update([(xs, acts, rng.permutation(G) if shuffle else G)])
+        ep_rewards.append(rews.sum())
+    return np.array(ep_rewards)
+
+
 def test_negative_control():
     section("4. Negative control: shuffle each episode's returns (destroys credit assignment)")
-    rewards = {}
-    for shuffle in (False, True):
-        cfg = make_config("cartpole", False, seed=1)
-        torch.manual_seed(1)
-        rng = np.random.default_rng(1)
-        agent, env, ep_rewards = make_agent(cfg), gym.make(cfg.env), []
-        for ep in range(400):
-            xs, acts, rews = run_episode(env, agent, cfg, seed=ep)
-            G = discounted_returns(rews, cfg.gamma)
-            agent.update([(xs, acts, rng.permutation(G) if shuffle else G)])
-            ep_rewards.append(rews.sum())
-        rewards[shuffle] = np.array(ep_rewards)
+    rewards = {shuffle: control_run(1, shuffle) for shuffle in (False, True)}
     true_r, shuf_r = rewards[False][-100:].mean(), rewards[True][-100:].mean()
     # Shuffling keeps episode-level credit (longer episodes add more positive terms),
     # so the prediction is "far slower learning that stays near random", not zero.

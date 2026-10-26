@@ -264,6 +264,30 @@ def main():
     log("   queue resets to 0 + A, and the cycle repeats.")
 
     # ------------------------------------------------------------------ #
+    section("8. Boundary cases with exactly predictable answers")
+    def row(a, s0):  # P[a, s0, :] as {next_state: prob}
+        return {int(j): round(float(p), 3) for j, p in enumerate(mdp.P[a, s0]) if p > 0}
+
+    check("exactly K = 15 waiting: dispatch removes all 15, nobody left, cost 100",
+          mdp.C[DISPATCH, 15] == 100 and row(DISPATCH, 15) == {k: 0.2 for k in range(1, 6)},
+          f"cost {mdp.C[DISPATCH, 15]:.0f}, next state {row(DISPATCH, 15)}")
+    check("K + 1 = 16 waiting: dispatch leaves 1 behind, which still pays ch: cost 102",
+          mdp.C[DISPATCH, 16] == 102 and row(DISPATCH, 16) == {k: 0.2 for k in range(2, 7)},
+          f"cost {mdp.C[DISPATCH, 16]:.0f}, next state {row(DISPATCH, 16)}")
+    check("198 waiting, hold: P(199) = 0.2 (A=1), P(200) = 0.8 (A>=2 overflow accumulates)",
+          row(HOLD, 198) == {199: 0.2, 200: 0.8}, f"{row(HOLD, 198)}")
+    for bad, why in (({1: 0.5, 2: 0.4}, "sums to 0.9"), ({1: 1.2, 2: -0.2}, "has a negative probability")):
+        try:
+            ShuttleMDP(arrivals=bad)
+            check(f"arrival pmf that {why} is rejected", False, "no error raised")
+        except ValueError as e:
+            check(f"arrival pmf that {why} is rejected", True, str(e))
+    free = ShuttleMDP(cf=0.0)
+    Qf = free.q_values(value_iteration(free)[0])
+    check("cf = 0: at s = 0 hold and dispatch tie exactly (dispatching nobody costs nothing)",
+          abs(Qf[HOLD, 0] - Qf[DISPATCH, 0]) < 1e-9, f"Q(hold) = {Qf[HOLD, 0]:.4f}, Q(dispatch) = {Qf[DISPATCH, 0]:.4f}")
+
+    # ------------------------------------------------------------------ #
     fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
     axes[0].plot(cf_grid, [t if t is not None else np.nan for t in thr_cf], "o-")
     axes[0].set(xlabel="dispatch cost $c_f$", ylabel="optimal threshold", title="Threshold vs $c_f$")
